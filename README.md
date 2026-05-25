@@ -1,192 +1,35 @@
+# RelayStore
 
-# Templar
+**RelayStore** is a high-performance warm storage buffer designed for managing and versioning files. 
 
-Templar is a template management system with versioning and intelligent caching. It provides a RESTful API for managing template files with support for multiple storage backends, automatic caching, and background job processing.
+Conceptually, RelayStore acts just like RAM sitting between a CPU and a Hard Drive. It serves as an intermediary layer between your fast clients and high-latency cold storage (like Storj/Cloud), ensuring instant file retrieval and non-blocking asynchronous uploads.
 
-## Features
+## Core Architecture
 
-- **Template Versioning**: Store and manage multiple versions of templates with unique version numbers
+RelayStore implements a **Hierarchical Storage Management (HSM)** strategy with three distinct tiers:
 
-- **Intelligent Caching**: LRU-based cache layer with configurable size limits and automatic eviction
+- **L1 (Hot) - In-Memory LRU Cache:** Holds the most frequently requested files for sub-millisecond retrieval.
+- **L2 (Warm) - Local Filesystem:** Acts as the persistent local buffer.
+- **L3 (Cold) - Storj / Cloud:** The decentralized, durable source of truth. High latency, low cost.
 
-- **Background Processing**: Asynchronous upload jobs with real-time progress tracking
+When a client requests a file, RelayStore checks `L1 -> L2 -> L3`. If fetched from L3, the file is automatically "thawed" into L2 and L1 for subsequent requests.
 
-- **Job Tracking**: Monitor upload progress and job status through the API
+## Technical Features
 
-## Architecture
+### 1. Asynchronous Write Buffering
+Writing directly to decentralized storage (L3) is a blocking, high-latency operation. Handling this synchronously would tie up server resources and risk client timeouts. RelayStore offloads uploads to background workers and instantly returns a `JobID`, keeping the client API highly responsive while allowing clients to poll for real-time progress.
 
-Templar uses a layered architecture with clear separation of concerns:
+### 2. Immutable Versioning
+Files in RelayStore are treated as immutable artifacts. Updates generate new, unique version numbers instead of overwriting existing files. This ensures backward compatibility for downstream services, prevents accidental breaking changes, and allows instant rollbacks without restoring from backups.
 
-- **Transport Layer**: HTTP handlers using Echo framework
+### 3. Strict Concurrency Control
+Because of the async upload nature, background workers might write a new file to the L1/L2 cache at the exact same millisecond that HTTP requests are trying to read it. To handle this, all read/write operations across the storage layers are heavily wrapped with Go's synchronization primitives (`RWMutex`) to prevent race conditions, dirty reads, and map panics.
 
-- **Service Layer**: Business logic and orchestration
+## Implementation Status
 
-- **Storage Layer**: SQLite database for metadata
-
-- **Object Store**: Pluggable storage backends (Local, Storj, Cache)
-
-The system implements a multi-tier storage strategy:
-
-1. **Cache Layer**: Fast local access with LRU eviction
-
-2. **Local Storage**: Filesystem-based storage for quick access
-
-3. **Storj Storage**: Decentralized cloud storage for durability
-
-All storage operations are wrapped with synchronization to ensure thread safety.
-
-## API Endpoints
-
-Please check the postman collection
-  
-## Getting Started
-
-### Prerequisites
-
-- Go 1.25.0 or later
-
-- SQLite (embedded, no separate installation needed)
-
-### Installation
-
-1. Clone the repository:
-
-```bash
-
-git  clone  https://github.com/beanbocchi/templar.git
-
-cd  templar
-
-```
-
-2. Install dependencies:
-
-```bash
-
-go  mod  download
-
-```
-
-3. Configure the application by creating a config file. See `config/config.dev.yml` for an example.
-
-4. Run database migrations (automatically handled on startup):
-
-- Migrations are located in the `migrations/` directory
-
-- The application will automatically run migrations on startup
-
-5. Start the server:
-
-```bash
-
-go  run  main.go
-
-```
-
-The server will start on port 8080 by default.
-
-### Configuration
-
-Templar uses Viper for configuration management. Configuration can be provided via:
-
-- YAML configuration files (default: `config/config.dev.yml` or `config/config.prod.yml`)
-
-- Environment variables (prefixed with `APP_`)
-
-- Command-line flags
-
-Key configuration sections:
-
-- **App**: Application name, job buffer size, JWT settings
-
-- **Log**: Logging level, format, and source tracking
-
-- **Objectstore**: Storage configuration for local, Storj, and cache layers
-
-Example configuration structure: Please check the `config/config.default.yml` file
-
-## Project Structure
-
-```
-
-templar/
-
-├── config/ # Configuration management
-
-├── internal/
-
-│ ├── client/ # External client implementations
-
-│ │ └── objectstore/ # Storage backends (local, storj, cache, sync)
-
-│ ├── db/ # Database models and queries (sqlc generated)
-
-│ ├── model/ # Domain models and errors
-
-│ ├── service/ # Business logic layer
-
-│ ├── transport/ # HTTP handlers and routing
-
-│ └── utils/ # Utility functions (blake3, locker, progressr)
-
-├── migrations/ # Database migration files
-
-├── pkg/ # Shared packages (binder, response, validator)
-
-├── queries/ # SQL queries for sqlc
-
-└── main.go # Application entry point
-
-```
-
-## Storage Backends
-
-### Local Storage
-
-File-based storage on the local filesystem. Configured via `objectstore.local.root` and `objectstore.local.baseUrl`.
-
-### Storj Storage
-
-Decentralized cloud storage integration. Requires Storj access grant and bucket configuration.
-
-### Cache Layer
-
-Intelligent caching with LRU eviction policy. Automatically manages cache size and evicts least recently used items when the cache limit is reached.
-
-## Development
-
-### Running Tests
-
-```bash
-
-go  test  ./...
-
-```
-
-### Database Migrations
-
-Migrations are managed using `golang-migrate`. Migration files are in the `migrations/` directory:
-
-- `0001_init.up.sql`: Creates initial schema
-
-- `0001_init.down.sql`: Drops schema
-
-Migrations run automatically on application startup.
-
-### Code Generation
-
-The project uses `sqlc` for type-safe database queries. To regenerate database code:
-
-```bash
-
-sqlc  generate
-
-```
-
-## License
-
-See LICENSE file for details.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+- [x] Storj integration for durable, decentralized storage.
+- [x] Persistent local filesystem buffering.
+- [x] Version control
+- [x] Thread-safe operations via Mutex/RWMutex. 
+- [ ] In-memory LRU cache for fastest retrieval.
+- [ ] Friendly SDK
